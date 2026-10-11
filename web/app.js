@@ -2,6 +2,7 @@ import { clamp, desktopTransform, screenDeltaToLocal, shouldRotatePage } from '.
 import { bindMouseButton } from './mouse-input.js';
 import { textCells, textOffset, deletionRange } from './text-layout.js';
 import { PhoneEnhancer } from './clarity.js';
+import { FrameBuffer } from './frame-buffer.js';
 
 const $ = id => document.getElementById(id);
 const app=$('app'), stage=$('stage'), canvas=$('desktop'), ctx=canvas.getContext('2d'), editor=$('editor');
@@ -18,7 +19,8 @@ $('phone-clarity').addEventListener('change',()=>{
 let socket=null, authenticated=false, online=false, desktop={width:1280,height:720,focus:null}, cursor={x:640,y:360};
 let resumeToken=null,recoverTimer=null,recoverAttempts=0,explicitDisconnect=false;
 let typing=false, transform={scale:1,tx:0,ty:0}, frame=null, decoding=false, move=null, pendingMove=null;
-let incomingFrameId=null, lastFrameAt=0;
+let incomingFrameId=null,incomingPatch=null, lastFrameAt=0;
+const frameBuffer=new FrameBuffer();
 let leftHeld=false, rightHeld=false, composing=false, counter=0, draftVersion=0, activeSend=null;
 let landscapeWanted=false, pageRotated=false, clickTimer=null, clickPoint=null;
 let nativeEditing=false, keyboardBase=null, nativeBlurTimer=null, keyboardWasVisible=false;
@@ -99,6 +101,8 @@ function fitViewport(){
   pageRotated=shouldRotatePage({wanted:landscapeWanted,width:w,height:h,nativeEditing:nativeEditing||!!keyboardVisible});
   if(!nativeEditing&&!keyboardVisible)keyboardBase=null;
   app.classList.toggle('page-rotated',pageRotated);
+  app.classList.toggle('lock-landscape',(pageRotated?h:w)>(pageRotated?w:h));
+  app.style.setProperty('--pin-size',Math.max(32,Math.min(52,((pageRotated?w:h)-100)/4))+'px');
   app.style.height=(pageRotated?w:h)+'px';app.style.width=(pageRotated?h:w)+'px';
   app.style.transform=pageRotated?`translateX(${w}px) rotate(90deg)`:'none';
   app.style.top=(vp?.offsetTop||0)+'px';app.style.left=(vp?.offsetLeft||0)+'px';
@@ -113,7 +117,7 @@ function setTyping(value, openKeyboard=false){
   $('typing-toggle').textContent=value?'正在打字':'打字';requestAnimationFrame(fitViewport);
 }
 function resetConnection(){
-  incomingFrameId=null;lastFrameAt=0;$('frame-warning').hidden=true;
+  incomingFrameId=null;incomingPatch=null;frameBuffer.reset();lastFrameAt=0;$('frame-warning').hidden=true;
   for(const binding of pressBindings)binding.cancel();
   authenticated=false;online=false;leftHeld=false;rightHeld=false;pendingMove=null;move=null;
   $('left').setAttribute('aria-pressed','false');$('right').setAttribute('aria-pressed','false');
@@ -140,13 +144,20 @@ function connectComputer(token,recovering=false){
   ws.addEventListener('message',async e=>{
     if(socket!==ws)return;
     if(e.data instanceof Blob){
-      if(decoding)return;decoding=true;
-      const frameId=incomingFrameId;
-      try{const image=await createImageBitmap(e.data);if(socket!==ws){image.close();return;}frame?.close();frame=image;lastFrameAt=Date.now();$('frame-warning').hidden=true;draw();}catch{status('画面解码失败');}finally{decoding=false;if(socket===ws&&ws.readyState===WebSocket.OPEN&&frameId!==null)ws.send(JSON.stringify({type:'frame-received',id:frameId}));}
+      if(decoding===ws)return;decoding=ws;
+      const frameId=incomingFrameId,patch=incomingPatch;let displayed=false,image=null;
+      try{
+        image=await createImageBitmap(e.data);if(socket!==ws)return;
+        const next=frameBuffer.apply(image,patch);frame?.close?.();frame=next;
+        if(next!==image){image.close();image=null;}
+        if(enhancer)enhancer.cached=null;
+        lastFrameAt=Date.now();$('frame-warning').hidden=true;draw();displayed=true;
+      }catch{status('画面解码失败，正在重新同步');if(socket===ws)ws.close();}
+      finally{if(image&&frame!==image)image.close();if(decoding===ws)decoding=false;if(displayed&&socket===ws&&ws.readyState===WebSocket.OPEN&&frameId!==null)ws.send(JSON.stringify({type:'frame-received',id:frameId}));}
       return;
     }
     let m;try{m=JSON.parse(e.data);}catch{return;}
-    if(m.type==='frame')incomingFrameId=m.id;
+    if(m.type==='frame'){incomingFrameId=m.id;incomingPatch=m.patch||null;}
     if(m.type==='authenticated'){authenticated=true;resumeToken=m.resumeToken||null;recoverAttempts=0;$('pairing').hidden=true;$('token').value='';status('已配对，等待电脑画面');}
     if(m.type==='presence'){online=m.online;$('connection').textContent=online?'电脑在线':'电脑离线';if(!online)status('电脑已离线，操作已停止');}
     if(m.type==='state'){

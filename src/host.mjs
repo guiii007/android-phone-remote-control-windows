@@ -30,8 +30,9 @@ if (!remote) {
 const desktop = demo ? new DemoDesktop() : new WindowsDesktop();
 let viewer = false, capturing = false, lastMouseActivity = 0, generation = 0;
 let frameDemand=false, frameReady=true, lastCaptureAt=0, frameRoundTripMs=0;
-let lastActivity=0,lastSentMode='dynamic';
-const framePolicy=new FramePolicy(frameWidth,frameQuality,{preferQuality:process.env.REMOTE_QUALITY_FIRST==='1'});
+const changedOnly=!demo&&process.env.REMOTE_CHANGED_ONLY==='1';
+let lastActivity=0,lastSentMode='dynamic',lastSentVersion=null,resetFrame=true;
+const framePolicy=new FramePolicy(frameWidth,frameQuality,{preferQuality:process.env.REMOTE_QUALITY_FIRST==='1',changedOnly});
 const heldButtons = new Set();
 const send = data => { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(data)); };
 async function release() { heldButtons.clear(); try { await desktop.request({ action: 'release' }); } catch {} }
@@ -47,9 +48,15 @@ function connect() {
   current.on('message', async data => {
     let m; try { m = JSON.parse(data.toString()); } catch { return; }
     if (m.type === 'authenticated') {frameDemand=m.frameDemand===true;console.log(demo ? '演示电脑端已连接。' : 'Windows 电脑端已连接。');}
-    if (m.type === 'viewer') { viewer = m.online; frameReady=true;framePolicy.reset();generation++; if (!viewer) void release(); else void captureFrame(); }
+    if (m.type === 'viewer') { viewer = m.online; frameReady=true;resetFrame=true;lastSentVersion=null;framePolicy.reset();generation++; if (!viewer) void release(); else void captureFrame(); }
     if (m.type === 'frame-ready') {
-      frameReady=true;frameRoundTripMs=Math.max(0,Number(m.roundTripMs)||0);
+      const g=generation;
+      if(changedOnly&&lastSentVersion!==null&&!m.discarded){
+        try{await desktop.request({action:'commit-frame',version:lastSentVersion});}
+        catch{resetFrame=true;framePolicy.reset();}
+      }
+      if(g!==generation||current!==socket)return;
+      lastSentVersion=null;frameReady=true;frameRoundTripMs=Math.max(0,Number(m.roundTripMs)||0);
       // 高清补帧较大，不用它的耗时误判动态小帧的链路速度。
       framePolicy.acknowledge(frameRoundTripMs,lastSentMode);
       void captureFrame();return;
@@ -75,18 +82,19 @@ async function captureFrame() {
   if (!viewer || capturing || (frameDemand&&!frameReady) || now-lastCaptureAt<interval || socket?.readyState !== WebSocket.OPEN || socket.bufferedAmount > 512 * 1024) return;
   capturing = true;frameReady=false;lastCaptureAt=Date.now(); const g = generation, peer = socket;
   try {
-    const state = await desktop.request({ action: 'snapshot', maxWidth:profile.width, quality:profile.quality });
+    const state = await desktop.request({ action: 'snapshot', maxWidth:profile.width, maxHeight:profile.height||0, quality:profile.quality,incremental:changedOnly,resetFrame });
     if (g !== generation || peer !== socket || peer.readyState !== WebSocket.OPEN) return;
+    resetFrame=false;
     const { image, ...meta } = state;
     framePolicy.observe(state,Date.now(),heldButtons.size>0||Date.now()-lastActivity<1200);
     // 静态观察中发现滚动或视频等大幅变化，丢掉尚未发送的高清截图，立即回到小帧。
-    if(profile.mode==='static'&&framePolicy.profile(Date.now(),heldButtons.size>0||Date.now()-lastActivity<1200).mode==='dynamic') {
+    if(!changedOnly&&profile.mode==='static'&&framePolicy.profile(Date.now(),heldButtons.size>0||Date.now()-lastActivity<1200).mode==='dynamic') {
       frameReady=true;lastCaptureAt=0;return;
     }
     const transmit=!!image&&framePolicy.shouldSend(profile,Date.now());
-    send({ type: 'state', ...meta, stream:{width:Math.min(profile.width,meta.width),quality:profile.quality,mode:profile.mode,roundTripMs:frameRoundTripMs,idleVerified:!transmit&&!framePolicy.dirty} });
+    send({ type: 'state', ...meta, stream:{width:state.patch?.screenWidth||Math.min(profile.width,meta.width),height:state.patch?.screenHeight,quality:profile.quality,mode:profile.mode,roundTripMs:frameRoundTripMs,idleVerified:!transmit&&!framePolicy.dirty} });
     if (transmit) {
-      framePolicy.sent(profile,Date.now());lastSentMode=profile.mode;
+      framePolicy.sent(profile,Date.now());lastSentMode=profile.mode;lastSentVersion=state.frameVersion??null;
       peer.send(Buffer.from(image, 'base64'), { binary: true });
     } else frameReady=true;
   } catch (e) { frameReady=true;send({ type: 'error', message: e.message }); }

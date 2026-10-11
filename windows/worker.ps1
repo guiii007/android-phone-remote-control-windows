@@ -41,9 +41,16 @@ try {
                     $maxWidth = 1440; $quality = 65
                     if ($request.maxWidth) { $maxWidth = [int]$request.maxWidth }
                     if ($request.quality) { $quality = [long]$request.quality }
-                    $image = [PalmDesktop]::Capture($maxWidth,$quality)
+                    if ($request.resetFrame) { [PalmDesktop]::ResetFrames() }
+                    $image = [PalmDesktop]::Capture($maxWidth,$quality,[int]$request.maxHeight,[bool]$request.incremental)
                     $result = @{ width=$bounds.Width; height=$bounds.Height; focus=$focus; image=$image; changed=[PalmDesktop]::FrameChanged; motionRatio=[PalmDesktop]::MotionRatio }
+                    if ($request.incremental) {
+                        $result.changed=[PalmDesktop]::CaptureChanged
+                        $result.frameVersion=[PalmDesktop]::CaptureVersion
+                        $result.patch=@{x=[PalmDesktop]::PatchX;y=[PalmDesktop]::PatchY;width=[PalmDesktop]::PatchWidth;height=[PalmDesktop]::PatchHeight;screenWidth=[PalmDesktop]::PixelWidth;screenHeight=[PalmDesktop]::PixelHeight}
+                    }
                 }
+                'commit-frame' { [PalmDesktop]::CommitFrame([long]$request.version) }
                 'move' { [PalmDesktop]::Move($request.x,$request.y) }
                 'button' { [PalmDesktop]::Button($request.button,$request.down,$request.x,$request.y) }
                 'wheel' { [PalmDesktop]::Wheel($request.delta,$request.x,$request.y) }

@@ -10,6 +10,7 @@ const publicRoot = new URL('../web/', import.meta.url);
 const types = { 'index.html': 'text/html; charset=utf-8', 'app.js': 'text/javascript; charset=utf-8', 'mouse-input.js': 'text/javascript; charset=utf-8', 'styles.css': 'text/css; charset=utf-8', 'geometry.js': 'text/javascript; charset=utf-8' };
 types['text-layout.js']='text/javascript; charset=utf-8';
 types['clarity.js']='text/javascript; charset=utf-8';
+types['frame-buffer.js']='text/javascript; charset=utf-8';
 export function createRemoteServer({ token, demo = false, deviceFile }) {
   if (typeof token !== 'string' || token.length < 32) throw new Error('配对密钥至少需要 32 个字符');
   let host = null, controller = null, latestState = null;
@@ -75,12 +76,12 @@ export function createRemoteServer({ token, demo = false, deviceFile }) {
       if (binary) {
         if (role !== 'host') { ws.close(4002, 'Invalid data'); return; }
         if (controller?.readyState === WebSocket.OPEN && controller.bufferedAmount < 64 * 1024 && (!frameFlowControl||frameInFlight===null)) {
-          if(frameFlowControl){frameInFlight=++frameSequence;frameSentAt=Date.now();send(controller,{type:'frame',id:frameInFlight});}
+          if(frameFlowControl){frameInFlight=++frameSequence;frameSentAt=Date.now();send(controller,{type:'frame',id:frameInFlight,patch:latestState?.patch});}
           controller.send(data, { binary: true });
           if(!frameFlowControl&&hostFrameDemand)send(host,{type:'frame-ready',roundTripMs:0});
         } else if(controller?.readyState===WebSocket.OPEN&&frameInFlight===null&&hostFrameDemand) {
           // 元数据或操作回执短暂占满发送缓冲时，降档重抓，不能永久耗尽抓屏额度。
-          send(host,{type:'frame-ready',roundTripMs:2500});
+          send(host,{type:'frame-ready',roundTripMs:2500,discarded:true});
         }
         return;
       }

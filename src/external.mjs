@@ -45,7 +45,7 @@ try{
     console.log(`${port} 服务已在运行，本次不重复启动。`);
   }else{
     process.env.BIND='0.0.0.0';process.env.PORT=String(port);delete process.env.RELAY_URL;
-    process.env.REMOTE_WIDTH='1440';process.env.REMOTE_QUALITY='70';process.env.REMOTE_FPS='4';process.env.REMOTE_QUALITY_FIRST='1';
+    process.env.REMOTE_WIDTH='1280';process.env.REMOTE_QUALITY='60';process.env.REMOTE_FPS='4';process.env.REMOTE_QUALITY_FIRST='0';process.env.REMOTE_CHANGED_ONLY='1';
     await import('./host.mjs');
   }
 }catch(error){console.error(error.message);process.exitCode=1;}

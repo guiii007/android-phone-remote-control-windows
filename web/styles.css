@@ -45,6 +45,16 @@ h1 { font-size:24px; margin:0 0 12px; font-weight:600; }
 #pin-pad button { width:72px; height:72px; border-radius:50%; font-size:28px; padding:0; background:#263c55; }
 #pin-pad #pin-delete { background:transparent; border-color:transparent; font-size:22px; }
 #pair-again { margin-top:24px; background:transparent; border:0; font-size:12px; color:#a7bdd6; }
+.lock-landscape #pairing { padding:12px 20px; }
+.lock-landscape #pairing-form { width:min(100%,640px); margin:auto; }
+.lock-landscape #pin-lock { display:grid; grid-template-columns:1fr 1fr; column-gap:24px; align-items:center; }
+.lock-landscape #pin-lock h1 { grid-column:1; font-size:22px; margin:0; }
+.lock-landscape #pin-lock p { grid-column:1; margin:6px 0; }
+.lock-landscape #pin-dots { grid-column:1; margin:12px 0; }
+.lock-landscape #pin-pad { grid-column:2; grid-row:1 / span 4; grid-template-columns:repeat(3,var(--pin-size,48px)); gap:8px 16px; }
+.lock-landscape #pin-pad button { width:var(--pin-size,48px); height:var(--pin-size,48px); min-height:0; font-size:24px; }
+.lock-landscape #pair-again { grid-column:1; margin:0; }
+.lock-landscape #pairing-error { margin:8px 0 0; font-size:12px; }
 @media(max-height:600px){#pin-pad {grid-template-columns:repeat(3,52px);gap:10px 20px;}#pin-pad button {width:52px;height:52px;}#pin-dots {margin:14px 0;}#pair-again {margin-top:12px;}}
 .page-rotated header { padding:3px 8px; flex-wrap:nowrap; }
 .page-rotated #editor-panel { padding:4px 8px; flex-wrap:nowrap; }

@@ -93,7 +93,9 @@ test('仅在手机确认当前帧后通知电脑抓下一帧，错误和重复�
   assert.equal((await host.next(m=>m.type==='authenticated')).frameDemand,true);
   const phone=await open(url,'controller',token,true);await phone.next(m=>m.type==='authenticated');
   const credits=[];host.ws.on('message',raw=>{const m=JSON.parse(raw.toString());if(m.type==='frame-ready')credits.push(m);});
-  host.ws.send(Buffer.from([1]),{binary:true});const frame=await phone.next(m=>m.type==='frame');await phone.next(m=>m.binary);
+  const patch={x:20,y:30,width:10,height:5,screenWidth:100,screenHeight:60};
+  host.ws.send(JSON.stringify({type:'state',width:100,height:60,patch}));
+  host.ws.send(Buffer.from([1]),{binary:true});const frame=await phone.next(m=>m.type==='frame');assert.deepEqual(frame.patch,patch);await phone.next(m=>m.binary);
   phone.ws.send(JSON.stringify({type:'frame-received',id:frame.id+1}));
   phone.ws.send(JSON.stringify({type:'command',id:'wrong-credit-barrier',action:'move',x:1,y:1}));await host.next(m=>m.id==='wrong-credit-barrier');
   assert.equal(credits.length,0);

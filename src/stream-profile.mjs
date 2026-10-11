@@ -6,11 +6,12 @@ export function streamProfile(width, quality, roundTripMs) {
 }
 
 export class FramePolicy {
-  constructor(width,quality,{preferQuality=false}={}) {this.width=width;this.quality=quality;this.preferQuality=preferQuality;this.reset();}
+  constructor(width,quality,{preferQuality=false,changedOnly=false}={}) {this.width=width;this.quality=quality;this.preferQuality=preferQuality;this.changedOnly=changedOnly;this.reset();}
   reset(now=Date.now()) {this.lastMotion=now;this.lastSent=0;this.sentMode=null;this.dirty=true;this.dynamicRtt=0;this.staticRtt=0;}
   acknowledge(roundTripMs,mode) {if(mode==='dynamic')this.dynamicRtt=roundTripMs;else this.staticRtt=roundTripMs;}
   profile(now,active) {
     const idle=!active&&now-this.lastMotion>=1200;
+    if(this.changedOnly)return {width:1280,height:720,quality:60,mode:idle?'static':'dynamic'};
     if(this.preferQuality){
       if(idle)return this.staticRtt>4000||this.dynamicRtt>4000?{width:1440,quality:75,mode:'static'}:{width:2560,quality:85,mode:'static'};
       const slow=this.dynamicRtt>4000,medium=this.dynamicRtt>2000;
@@ -24,6 +25,7 @@ export class FramePolicy {
     if(active || motionRatio>0.015)this.lastMotion=now;
   }
   shouldSend(profile,now) {
+    if(this.changedOnly)return this.dirty;
     if(profile.mode!==this.sentMode)return true;
     if(!this.dirty)return false;
     return profile.mode==='dynamic' || now-this.lastSent>=2000;

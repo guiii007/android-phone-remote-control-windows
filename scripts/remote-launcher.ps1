@@ -1,4 +1,4 @@
-﻿param([switch]$CheckOnly,[string]$PreviewPath)
+﻿param([switch]$CheckOnly,[string]$PreviewPath,[switch]$TrayCheck)
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path $PSScriptRoot -Parent
 $taskSettings = @{}
@@ -41,11 +41,17 @@ if ($CheckOnly) {
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 $created = $false
-$taskMutex = [System.Threading.Mutex]::new($true,'Local\PalmRemoteLauncher',[ref]$created)
+$taskMutexName=if($TrayCheck -or $PreviewPath){'Local\PalmRemoteLauncherPreview'}else{'Local\PalmRemoteLauncher'}
+$taskMutex = [System.Threading.Mutex]::new($true,$taskMutexName,[ref]$created)
 if (-not $created) {
-    [System.Windows.Forms.MessageBox]::Show('启动面板已经打开，请在任务栏中找到“掌上遥控”。','掌上遥控') | Out-Null
+    try {$taskExistingEvent=[System.Threading.EventWaitHandle]::OpenExisting('Local\PalmRemoteShow');$null=$taskExistingEvent.Set();$taskExistingEvent.Dispose()}
+    catch {[System.Windows.Forms.MessageBox]::Show('掌上遥控已在运行，请从右下角托盘打开。','掌上遥控') | Out-Null}
     $taskMutex.Dispose(); exit
 }
+$taskEventName=if($TrayCheck -or $PreviewPath){'Local\PalmRemoteShowPreview'}else{'Local\PalmRemoteShow'}
+$taskShowEvent=[System.Threading.EventWaitHandle]::new($false,[System.Threading.EventResetMode]::AutoReset,$taskEventName)
+$script:exitRequested=$false
+$script:trayHintShown=$false
 $script:ownedProcess = $null
 $script:outputTask = $null
 $script:errorTask = $null
@@ -54,6 +60,41 @@ $form.Text = '掌上遥控 · 启动面板'
 $form.ClientSize = New-Object System.Drawing.Size(510,330)
 $form.StartPosition = 'CenterScreen'; $form.FormBorderStyle = 'FixedDialog'; $form.MaximizeBox = $false
 $form.Font = New-Object System.Drawing.Font('Microsoft YaHei UI',10)
+$taskIcon=[System.Drawing.Icon]::new((Join-Path $taskRoot 'assets\palm-remote.ico'))
+$form.Icon=$taskIcon
+$tray=New-Object System.Windows.Forms.NotifyIcon
+$tray.Icon=$taskIcon;$tray.Text='掌上遥控';$tray.Visible=(-not $PreviewPath -and -not $TrayCheck)
+$trayMenu=New-Object System.Windows.Forms.ContextMenuStrip
+$trayOpen=$trayMenu.Items.Add('打开面板')
+$trayExit=$trayMenu.Items.Add('退出掌上遥控')
+$tray.ContextMenuStrip=$trayMenu
+function Show-Panel {$form.ShowInTaskbar=$true;$form.WindowState='Normal';$form.Show();$form.Activate()}
+function Hide-Panel {
+    $form.Hide();$form.ShowInTaskbar=$false
+    if(-not $script:trayHintShown){$script:trayHintShown=$true;$tray.BalloonTipTitle='掌上遥控仍在运行';$tray.BalloonTipText='双击托盘图标打开面板；右键选择“退出掌上遥控”才会停止。';$tray.ShowBalloonTip(2500)}
+}
+$tray.Add_DoubleClick({Show-Panel})
+$trayOpen.Add_Click({Show-Panel})
+$trayExit.Add_Click({$script:exitRequested=$true;$form.Close()})
+function Minimize-Panel {$form.ShowInTaskbar=$true;$form.Show();$form.WindowState='Minimized'}
+function Choose-CloseDestination {
+    $dialog=New-Object System.Windows.Forms.Form
+    $dialog.Text='收起掌上遥控';$dialog.ClientSize=New-Object System.Drawing.Size(420,155)
+    $dialog.StartPosition='CenterParent';$dialog.FormBorderStyle='FixedDialog';$dialog.MaximizeBox=$false;$dialog.MinimizeBox=$false
+    $dialog.ShowInTaskbar=$false;$dialog.Icon=$taskIcon;$dialog.Font=$form.Font
+    $label=New-Object System.Windows.Forms.Label
+    $label.Text='面板收起后，远控仍继续运行。请选择放在哪里：'
+    $label.Location=New-Object System.Drawing.Point(18,22);$label.Size=New-Object System.Drawing.Size(390,46);$dialog.Controls.Add($label)
+    $buttons=@(@('收进托盘',[System.Windows.Forms.DialogResult]::Yes,18,120),@('最小化到任务栏',[System.Windows.Forms.DialogResult]::No,148,160),@('取消',[System.Windows.Forms.DialogResult]::Cancel,318,84))
+    foreach($item in $buttons){
+        $button=New-Object System.Windows.Forms.Button;$button.Text=$item[0];$button.DialogResult=$item[1]
+        $button.Location=New-Object System.Drawing.Point($item[2],88);$button.Size=New-Object System.Drawing.Size($item[3],38)
+        $dialog.Controls.Add($button)
+        if($item[1] -eq [System.Windows.Forms.DialogResult]::Yes){$dialog.AcceptButton=$button}
+        if($item[1] -eq [System.Windows.Forms.DialogResult]::Cancel){$dialog.CancelButton=$button}
+    }
+    try{return $dialog.ShowDialog($form)}finally{$dialog.Dispose()}
+}
 function Add-Label($text,$x,$y,$width,$height) {
     $label = New-Object System.Windows.Forms.Label
     $label.Text=$text; $label.Location=New-Object System.Drawing.Point($x,$y); $label.Size=New-Object System.Drawing.Size($width,$height)
@@ -74,7 +115,7 @@ $copyAddress=Add-Button '复制地址' 20 174 110
 $copyToken=Add-Button '复制连接密钥' 140 174 140
 $startButton=Add-Button '启动远控' 290 174 95
 $stopButton=Add-Button '停止远控' 395 174 95
-$null=Add-Label "手机：开启 Tailscale → 打开收藏的网址 → 输入密钥。`r`n电脑保持联网、不要休眠；畅连可保持原来的智能分流。`r`n此面板启动的远控：关闭面板即停止，使用时可最小化。" 20 232 470 82
+$null=Add-Label "手机：开启 Tailscale → 打开收藏的网址 → 输入解锁密码。`r`n关闭窗口可选择收进托盘或任务栏；最小化保留任务栏。`r`n双击托盘图标打开面板；右键选择退出掌上遥控停止。" 20 232 470 82
 function Update-Panel {
     $health=Get-RemoteHealth
     $addressBox.Text=Get-PhoneAddress
@@ -128,11 +169,38 @@ $copyToken.Add_Click({
 $startButton.Add_Click({Start-Remote})
 $stopButton.Add_Click({Stop-Remote;Update-Panel})
 $timer=New-Object System.Windows.Forms.Timer
-$timer.Interval=2000; $timer.Add_Tick({Update-Panel})
-if (-not $PreviewPath) { $form.Add_Shown({Update-Panel;Start-Remote;$timer.Start()}) }
-$form.Add_FormClosing({$timer.Stop();Stop-Remote})
+$timer.Interval=2000; $timer.Add_Tick({if($taskShowEvent.WaitOne(0)){Show-Panel};Update-Panel})
+if (-not $PreviewPath -and -not $TrayCheck) { $form.Add_Shown({Update-Panel;Start-Remote;$timer.Start()}) }
+$form.Add_FormClosing({
+    param($sender,$eventArgs)
+    if(-not $script:exitRequested -and -not $PreviewPath -and $eventArgs.CloseReason -eq [System.Windows.Forms.CloseReason]::UserClosing){
+        $eventArgs.Cancel=$true
+        if($form.WindowState -eq 'Minimized'){Show-Panel}
+        $choice=Choose-CloseDestination
+        if($choice -eq [System.Windows.Forms.DialogResult]::Yes){Hide-Panel}
+        elseif($choice -eq [System.Windows.Forms.DialogResult]::No){Minimize-Panel}
+        return
+    }
+    $timer.Stop();Stop-Remote
+})
 try {
-    if ($PreviewPath) {
+    if ($TrayCheck) {
+        $script:stopCount=0;$script:trayHintShown=$true
+        function Stop-Remote {$script:stopCount++}
+        function Choose-CloseDestination {return $script:testChoice}
+        $script:testChoice=[System.Windows.Forms.DialogResult]::Yes
+        Show-Panel;$form.Close()
+        if($form.Visible -or $form.ShowInTaskbar -or $form.IsDisposed -or $script:stopCount -ne 0){throw 'Close-to-tray failed'}
+        $trayOpen.PerformClick()
+        if(-not $form.Visible -or -not $form.ShowInTaskbar){throw 'Tray restore failed'}
+        $script:testChoice=[System.Windows.Forms.DialogResult]::No;$form.Close()
+        if(-not $form.ShowInTaskbar -or $form.WindowState -ne 'Minimized' -or $script:stopCount -ne 0){throw 'Close-to-taskbar failed'}
+        Show-Panel;$script:testChoice=[System.Windows.Forms.DialogResult]::Cancel;$form.Close()
+        if(-not $form.Visible -or $script:stopCount -ne 0){throw 'Cancel-close failed'}
+        Show-Panel;$trayExit.PerformClick()
+        if(-not $form.IsDisposed -or $script:stopCount -ne 1){throw 'Explicit exit failed'}
+        @{ok=$true;closeKeepsRunning=$true;closeToTaskbar=$true;cancelKeepsPanel=$true;trayRestore=$true;explicitExitStops=$true} | ConvertTo-Json -Compress
+    } elseif ($PreviewPath) {
         Update-Panel
         $form.Show();$form.Refresh()
         $bitmap=New-Object System.Drawing.Bitmap($form.Width,$form.Height)
@@ -140,4 +208,4 @@ try {
         finally { $bitmap.Dispose() }
     } else { [System.Windows.Forms.Application]::Run($form) }
 }
-finally { $timer.Dispose();$taskMutex.ReleaseMutex();$taskMutex.Dispose();if($script:ownedProcess){$script:ownedProcess.Dispose()};$form.Dispose() }
+finally { $timer.Dispose();$tray.Visible=$false;$tray.Dispose();$trayMenu.Dispose();$taskShowEvent.Dispose();$taskMutex.ReleaseMutex();$taskMutex.Dispose();if($script:ownedProcess){$script:ownedProcess.Dispose()};$form.Dispose();$taskIcon.Dispose() }
