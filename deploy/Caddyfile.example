@@ -1,0 +1,4 @@
+# 替换成你的域名，将 DNS 指向中转服务器。
+remote.example.com {
+    reverse_proxy 127.0.0.1:8787
+}

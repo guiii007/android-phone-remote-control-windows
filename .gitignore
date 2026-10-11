@@ -1,0 +1,10 @@
+node_modules/
+.pairing-token
+.demo-token
+.device-access.json
+.device-access.json.tmp
+.remote-settings.json
+.env
+*.log
+artifacts/
+/PalmRemote.exe
